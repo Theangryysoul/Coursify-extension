@@ -5,6 +5,12 @@
 
 A standalone Manifest V3 extension for **https://getcoursify.vercel.app**, requiring **Chrome 123 or newer**. No build step, dependencies, or changes to the Coursify frontend/backend are required.
 
+## 📥 Download Extension
+
+**[⬇️ Download Coursify Chrome Extension v1.0.0 (ZIP)](https://github.com/Theangryysoul/Coursify-extension/releases/download/v1.0.0/Coursify-extension.zip)**
+
+Download the ZIP file above and extract it before installing. Follow the instructions below to load the extension in Chrome.
+
 ## Install in Google Chrome
 
 1. Open `chrome://extensions`.

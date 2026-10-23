@@ -12,7 +12,7 @@
     "128": "c-logo.png"
   },
   "permissions": ["contextMenus", "scripting", "storage", "activeTab"],
-  "host_permissions": ["https://vishal-coursify.vercel.app/*"],
+  "host_permissions": ["https://getcoursify.vercel.app/*"],
   "background": {
     "service_worker": "background.js",
     "type": "module"
@@ -29,7 +29,7 @@
   },
   "content_scripts": [
     {
-      "matches": ["https://vishal-coursify.vercel.app/*"],
+      "matches": ["https://getcoursify.vercel.app/*"],
       "js": ["session-watcher.js"],
       "run_at": "document_idle"
     }

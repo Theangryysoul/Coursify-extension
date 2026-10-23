@@ -1,7 +1,7 @@
 import { normalizeYoutubeUrl } from "./youtube-url.js";
 import { importInCoursifyTab } from "./coursify-api.js";
 
-const ORIGIN = "https://vishal-coursify.vercel.app";
+const ORIGIN = "https://getcoursify.vercel.app";
 const STATE_KEY = "importState";
 const ACTIVE_STATUSES = new Set(["importing", "waiting-login"]);
 const YOUTUBE_PATTERNS = [
