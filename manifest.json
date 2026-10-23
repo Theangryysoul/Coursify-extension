@@ -1,0 +1,37 @@
+{
+  "manifest_version": 3,
+  "name": "Coursify YouTube Import",
+  "version": "1.0.0",
+  "author": "Jerry <theangryysoul@gmail.com>",
+  "description": "Right-click a YouTube video or playlist to import it into your Coursify library.",
+  "minimum_chrome_version": "123",
+  "icons": {
+    "16": "c-logo.png",
+    "32": "c-logo.png",
+    "48": "c-logo.png",
+    "128": "c-logo.png"
+  },
+  "permissions": ["contextMenus", "scripting", "storage", "activeTab"],
+  "host_permissions": ["https://vishal-coursify.vercel.app/*"],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_title": "Coursify — Import course",
+    "default_icon": {
+      "16": "c-logo.png",
+      "32": "c-logo.png",
+      "48": "c-logo.png",
+      "128": "c-logo.png"
+    },
+    "default_popup": "popup.html"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://vishal-coursify.vercel.app/*"],
+      "js": ["session-watcher.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

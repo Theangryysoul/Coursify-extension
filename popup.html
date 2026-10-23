@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Coursify Import</title>
+    <link rel="icon" type="image/png" href="c-logo.png" />
+    <link rel="stylesheet" href="popup.css" />
+    <script type="module" src="popup.js"></script>
+  </head>
+  <body>
+    <header>
+      <img class="mark" src="c-logo.png" width="40" height="40" alt="" aria-hidden="true" />
+      <div>
+        <h1>Coursify</h1>
+        <p>YouTube course importer</p>
+      </div>
+    </header>
+    <main>
+      <p class="hint">Right-click a YouTube video or playlist link and choose <strong>Import course</strong>.</p>
+      <section class="status" aria-live="polite" aria-atomic="true">
+        <span id="status-label" class="status-label">Ready to import</span>
+        <p id="status-message">Already signed in? Your course imports without leaving YouTube.</p>
+        <p id="course-url" class="course-url" hidden></p>
+      </section>
+      <p id="feedback" role="alert" hidden></p>
+      <button id="import-current" class="primary" type="button">Import current YouTube page</button>
+      <div class="secondary-actions">
+        <button id="retry" type="button" hidden>Retry import</button>
+        <button id="login" type="button" hidden>Continue to login</button>
+        <button id="cancel" type="button" hidden>Cancel pending import</button>
+      </div>
+    </main>
+    <footer>
+      <a href="https://vishal-coursify.vercel.app/courses" target="_blank" rel="noopener noreferrer">Open Coursify library <span aria-hidden="true">↗</span></a>
+      <span>No passwords stored</span>
+    </footer>
+  </body>
+</html>
