@@ -1,7 +1,9 @@
 // Everything runs in the isolated extension world on the Coursify origin.
 // The HTTP-only, SameSite=Strict cookie never needs to leave the browser.
+const ALLOWED_ORIGINS = ["https://getcoursify.vercel.app", "https://coursify-v2.vercel.app"];
+
 export async function importInCoursifyTab(courseUrl) {
-  if (location.origin !== "https://getcoursify.vercel.app") {
+  if (!ALLOWED_ORIGINS.includes(location.origin)) {
     return { status: "error", message: "The Coursify tab changed. Please try again." };
   }
 

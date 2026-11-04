@@ -1,13 +1,15 @@
 # Coursify Chrome extension
 
-**Developer:** Jerry  
+**Developer:** Vishaal Verma  
 **Developer email:** theangryysoul@gmail.com
 
-A standalone Manifest V3 extension for **https://getcoursify.vercel.app**, requiring **Chrome 123 or newer**. No build step, dependencies, or changes to the Coursify frontend/backend are required.
+A standalone Manifest V3 extension for **https://getcoursify.vercel.app** (primary) and **https://coursify-v2.vercel.app** (fallback), requiring **Chrome 123 or newer**. No build step, dependencies, or changes to the Coursify frontend/backend are required.
+
+The extension automatically tries the primary origin first. If no Coursify tab is found there, it checks the fallback origin. When creating a new tab, it uses the primary origin by default.
 
 ## 📥 Download Extension
 
-**[⬇️ Download Coursify Chrome Extension v1.0.0 (ZIP)](https://github.com/Theangryysoul/Coursify-extension/releases/download/v1.0.0/Coursify-extension.zip)**
+**[⬇️ Download Coursify Chrome Extension v1.1.0 (ZIP)](https://github.com/Theangryysoul/Coursify-extension/releases/download/v1.1.0/Coursify-extension.zip)**
 
 Download the ZIP file above and extract it before installing. Follow the instructions below to load the extension in Chrome.
 
@@ -41,7 +43,7 @@ If no Coursify tab is open, it opens a temporary **inactive** Coursify tab. Afte
 
 ### Login required
 
-The extension opens **https://getcoursify.vercel.app/login** in a new active tab (or activates its temporary tab). Sign in with password or Google, or register using Coursify's normal page. After Coursify navigates away from the login/register screen, the extension automatically resumes the pending import.
+The extension opens **https://getcoursify.vercel.app/login** (primary) or **https://coursify-v2.vercel.app/login** (fallback, if the import is already using that origin) in a new active tab (or activates its temporary tab). Sign in with password or Google, or register using Coursify's normal page. After Coursify navigates away from the login/register screen, the extension automatically resumes the pending import.
 
 Keep that login tab open until the import finishes. The YouTube tab is never navigated. Existing Coursify work tabs are not redirected. If you close the login tab, use **Retry import** from the extension popup.
 
@@ -63,7 +65,7 @@ An already open library page may need a refresh to show a newly imported course;
 ## Permissions and privacy
 
 - **contextMenus**: adds the right-click import option.
-- **scripting** and the single **Coursify host permission**: run same-origin API requests on Coursify. Requests use `/api/v1/auth/refresh` and `/api/v1/youtube/import`, matching the app.
+- **scripting** and the **Coursify host permissions** (both origins): run same-origin API requests on Coursify. Requests use `/api/v1/auth/refresh` and `/api/v1/youtube/import`, matching the app.
 - **storage**: stores only the latest import URL/status, job/tab identifiers, timestamps, and returned course ID in `chrome.storage.local`. It does not use Chrome sync and stores no password, access token, refresh token, or profile.
 - **activeTab**: reads the current page URL when you explicitly use the toolbar button.
 - The Coursify content script only detects navigation away from login while an import is pending. It does not read forms, capture credentials, or modify the page.
@@ -82,12 +84,13 @@ Tests use mocked Chrome APIs and mocked API responses; they do not log in or cre
 Manual Chrome checklist:
 
 1. Load unpacked and check that the extension card has no errors.
-2. While logged into Coursify, import a new video from its right-click link menu. Confirm `OK`, no tab redirection, and a new course in the library after refreshing it.
+2. While logged into Coursify (either origin), import a new video from its right-click link menu. Confirm `OK`, no tab redirection, and a new course in the library after refreshing it.
 3. Import a playlist, then a Shorts or `youtu.be` link. Check the resulting course types.
 4. Close all Coursify tabs but remain logged in. Import again; confirm the temporary inactive tab closes and YouTube stays active.
 5. Log out of Coursify. Import a different video; confirm the login tab opens and importing resumes automatically after password/Google login.
 6. Close a pending login tab and retry from the popup. Test cancelling a pending login as well.
 7. Import a duplicate video and an unavailable/private playlist; confirm useful backend messages appear.
 8. Try an unsupported link and rapid repeated imports; confirm they do not issue unwanted requests.
+9. Test fallback: have a tab open only on the fallback origin (`coursify-v2.vercel.app`), then import—verify it uses that existing tab instead of creating a new one on the primary origin.
 
 This folder is a locally loadable extension, not a Chrome Web Store publication. No deployment or server restart is needed.

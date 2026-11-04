@@ -155,7 +155,10 @@ test("manifest is MV3 with narrowly scoped permissions and existing entry files"
   );
   assert.equal(manifest.manifest_version, 3);
   assert.equal(manifest.background.type, "module");
-  assert.deepEqual(manifest.host_permissions, [`${ORIGIN}/*`]);
+  assert.deepEqual(manifest.host_permissions, [
+    "https://getcoursify.vercel.app/*",
+    "https://coursify-v2.vercel.app/*",
+  ]);
   assert.ok(!manifest.permissions.includes("cookies"));
   assert.ok(!manifest.permissions.includes("tabs"));
   const files = [

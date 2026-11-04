@@ -1,7 +1,8 @@
 import { normalizeYoutubeUrl } from "./youtube-url.js";
 import { importInCoursifyTab } from "./coursify-api.js";
 
-const ORIGIN = "https://getcoursify.vercel.app";
+const ORIGINS = ["https://getcoursify.vercel.app", "https://coursify-v2.vercel.app"];
+const PRIMARY_ORIGIN = ORIGINS[0];
 const STATE_KEY = "importState";
 const ACTIVE_STATUSES = new Set(["importing", "waiting-login"]);
 const YOUTUBE_PATTERNS = [
@@ -68,7 +69,7 @@ chrome.runtime.onStartup.addListener(() => {
   void setupMenus().catch(console.error);
 });
 
-async function waitForTab(tabId) {
+async function waitForTab(tabId, expectedOrigin) {
   // Register before inspecting the tab, so a fast navigation cannot be missed.
   await new Promise((resolve, reject) => {
     const cleanup = () => {
@@ -83,7 +84,7 @@ async function waitForTab(tabId) {
     };
     const onUpdated = (id, change, tab) => {
       if (id === tabId && change.status === "complete") {
-        finish(new URL(tab.url).origin === ORIGIN ? null : new Error("Unexpected tab origin"));
+        finish(ORIGINS.includes(new URL(tab.url).origin) ? null : new Error("Unexpected tab origin"));
       }
     };
     const onRemoved = (id) => {
@@ -94,24 +95,26 @@ async function waitForTab(tabId) {
     chrome.tabs.onRemoved.addListener(onRemoved);
     chrome.tabs.get(tabId).then((tab) => {
       if (tab.status === "complete" && !tab.pendingUrl) {
-        finish(new URL(tab.url).origin === ORIGIN ? null : new Error("Unexpected tab origin"));
+        finish(ORIGINS.includes(new URL(tab.url).origin) ? null : new Error("Unexpected tab origin"));
       }
     }).catch(finish);
   });
 }
 
 async function getCoursifyTab() {
-  const tabs = await chrome.tabs.query({ url: `${ORIGIN}/*` });
-  const existing = tabs.find((tab) => tab.active) ?? tabs[0];
+  // Try each origin in order (primary first, then fallback)
+  for (const origin of ORIGINS) {
+    const tabs = await chrome.tabs.query({ url: `${origin}/*` });
+    const existing = tabs.find((tab) => tab.active) ?? tabs[0];
 
-  if (existing) {
-    return { tab: existing, temporaryTab: false };
+    if (existing) {
+      return { tab: existing, temporaryTab: false, origin };
+    }
   }
 
-  // SameSite=Strict prevents checking the session directly from the service worker.
-  // A tab on the site can send its cookie normally; it never takes focus.
-  const tab = await chrome.tabs.create({ url: `${ORIGIN}/login`, active: false });
-  return { tab, temporaryTab: true };
+  // No existing tab found - create one on the primary origin
+  const tab = await chrome.tabs.create({ url: `${PRIMARY_ORIGIN}/login`, active: false });
+  return { tab, temporaryTab: true, origin: PRIMARY_ORIGIN };
 }
 
 async function closeTemporaryTab(state) {
@@ -119,7 +122,7 @@ async function closeTemporaryTab(state) {
 
   try {
     const tab = await chrome.tabs.get(state.tabId);
-    if (new URL(tab.url).origin === ORIGIN && !tab.active) {
+    if (ORIGINS.includes(new URL(tab.url).origin) && !tab.active) {
       await chrome.tabs.remove(state.tabId);
     }
   } catch {
@@ -129,12 +132,13 @@ async function closeTemporaryTab(state) {
 
 async function showLogin(state) {
   // Never navigate an existing Coursify tab away from work the user has open.
+  const origin = state.origin || PRIMARY_ORIGIN;
   let tab;
 
   if (state.temporaryTab || state.loginOpened) {
-    tab = await chrome.tabs.update(state.tabId, { url: `${ORIGIN}/login`, active: true });
+    tab = await chrome.tabs.update(state.tabId, { url: `${origin}/login`, active: true });
   } else {
-    tab = await chrome.tabs.create({ url: `${ORIGIN}/login`, active: true });
+    tab = await chrome.tabs.create({ url: `${origin}/login`, active: true });
   }
 
   await updateJob(state.id, {
@@ -149,7 +153,7 @@ async function showLogin(state) {
 
 async function runImport(state) {
   try {
-    await waitForTab(state.tabId);
+    await waitForTab(state.tabId, state.origin);
     const results = await chrome.scripting.executeScript({
       target: { tabId: state.tabId },
       func: importInCoursifyTab,
@@ -202,12 +206,13 @@ async function startImport(value) {
       temporaryTab: false,
       loginOpened: false,
       courseId: null,
+      origin: PRIMARY_ORIGIN,
     };
     await writeState(state);
 
     try {
-      const { tab, temporaryTab } = await getCoursifyTab();
-      state = await updateJob(state.id, { tabId: tab.id, temporaryTab });
+      const { tab, temporaryTab, origin } = await getCoursifyTab();
+      state = await updateJob(state.id, { tabId: tab.id, temporaryTab, origin });
       if (state) await runImport(state);
     } catch {
       await updateJob(state.id, {
@@ -224,7 +229,7 @@ async function startImport(value) {
 async function resumeAfterLogin(sender) {
   if (busy || sender.frameId !== 0 || !sender.tab?.id) return;
   const senderUrl = new URL(sender.url ?? sender.tab.url);
-  if (senderUrl.origin !== ORIGIN || ["/login", "/register"].includes(senderUrl.pathname)) return;
+  if (!ORIGINS.includes(senderUrl.origin) || ["/login", "/register"].includes(senderUrl.pathname)) return;
 
   busy = true;
   try {
@@ -260,7 +265,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (sender.id !== chrome.runtime.id) return;
 
   if (message?.type === "coursify-import-alive") {
-    if (sender.frameId === 0 && sender.tab?.id && sender.url?.startsWith(`${ORIGIN}/`)) {
+    if (sender.frameId === 0 && sender.tab?.id && ORIGINS.some((o) => sender.url?.startsWith(`${o}/`))) {
       sendResponse({ ok: true });
     }
     return;
