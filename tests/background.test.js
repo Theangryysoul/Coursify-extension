@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 
 const ORIGIN = "https://getcoursify.vercel.app";
+const FALLBACK = "https://coursify-v2.vercel.app";
 const VIDEO = "https://www.youtube.com/watch?v=dQw4w9WgXcQ";
 const POPUP = "chrome-extension://test/popup.html";
 
@@ -67,10 +68,11 @@ async function createHarness(t, tabs = [], results = []) {
     tabs: {
       onUpdated: event(),
       onRemoved: event(),
-      query: async (options) =>
-        [...tabMap.values()].filter((tab) =>
-          options.url ? tab.url.startsWith(`${ORIGIN}/`) : tab.active,
-        ),
+      query: async (options) => {
+        if (!options.url) return [...tabMap.values()].filter((tab) => tab.active);
+        const prefix = options.url.replace(/\*$/, "");
+        return [...tabMap.values()].filter((tab) => tab.url.startsWith(prefix));
+      },
       get: async (id) => {
         if (!tabMap.has(id)) throw new Error("Tab not found");
         return { ...tabMap.get(id) };
@@ -271,6 +273,88 @@ test("signed-out existing work tabs are not redirected", async (t) => {
   assert.equal(h.records.created[0].url, `${ORIGIN}/login`);
   assert.equal(h.records.created[0].active, true);
   assert.equal(h.state.importState.tabId, 100);
+});
+
+test("falls back to the signed-in deployment when the first origin needs login", async (t) => {
+  const h = await createHarness(
+    t,
+    [
+      { id: 1, url: VIDEO, active: true },
+      { id: 2, url: `${ORIGIN}/courses`, active: false },
+      { id: 3, url: `${FALLBACK}/courses`, active: false },
+    ],
+    [loginNeeded, success],
+  );
+  await h.send("import-current");
+  assert.equal(h.state.importState.status, "success");
+  assert.equal(h.state.importState.origin, FALLBACK);
+  assert.equal(h.records.executions.length, 2);
+  assert.equal(h.records.executions[0].target.tabId, 2);
+  assert.equal(h.records.executions[1].target.tabId, 3);
+  assert.equal(h.records.created.length, 0);
+  assert.equal(h.records.updated.length, 0);
+  assert.equal(h.records.removed.length, 0);
+  assert.equal(h.state.preferredOrigin, FALLBACK);
+});
+
+test("falls back to the other deployment when the first is unreachable", async (t) => {
+  const h = await createHarness(
+    t,
+    [
+      { id: 1, url: VIDEO, active: true },
+      { id: 2, url: `${ORIGIN}/courses`, active: false },
+      { id: 3, url: `${FALLBACK}/courses`, active: false },
+    ],
+    [
+      {
+        status: "error",
+        message: "Could not reach Coursify. Check your connection and try again.",
+        retryable: true,
+      },
+      success,
+    ],
+  );
+  await h.send("import-current");
+  assert.equal(h.state.importState.status, "success");
+  assert.equal(h.records.executions.length, 2);
+  assert.equal(h.records.executions[1].target.tabId, 3);
+  assert.equal(h.state.preferredOrigin, FALLBACK);
+});
+
+test("falls back to a new tab when the first deployment has no Coursify API", async (t) => {
+  const h = await createHarness(
+    t,
+    [
+      { id: 1, url: VIDEO, active: true },
+      { id: 2, url: `${ORIGIN}/`, active: false },
+    ],
+    [
+      {
+        status: "error",
+        message: "Could not check your Coursify session. Please try again.",
+        retryable: true,
+      },
+      success,
+    ],
+  );
+  await h.send("import-current");
+  assert.equal(h.state.importState.status, "success");
+  assert.equal(h.state.importState.origin, FALLBACK);
+  assert.equal(h.records.executions.length, 2);
+  assert.equal(h.records.created.length, 1);
+  assert.equal(h.records.created[0].url, `${FALLBACK}/login`);
+  assert.equal(h.records.executions[1].target.tabId, h.records.created[0].id);
+  assert.equal(h.state.preferredOrigin, FALLBACK);
+});
+
+test("with no open Coursify tab, the remembered deployment is used", async (t) => {
+  const h = await createHarness(t, [{ id: 1, url: VIDEO, active: true }], [success]);
+  h.state.preferredOrigin = FALLBACK;
+  await h.send("import-current");
+  assert.equal(h.state.importState.status, "success");
+  assert.equal(h.records.created.length, 1);
+  assert.equal(h.records.created[0].url, `${FALLBACK}/login`);
+  assert.deepEqual(h.records.removed, [h.records.created[0].id]);
 });
 
 test("repeated clicks and unrelated ready messages cannot start another pending import", async (t) => {

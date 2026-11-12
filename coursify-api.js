@@ -1,9 +1,13 @@
 // Everything runs in the isolated extension world on the Coursify origin.
 // The HTTP-only, SameSite=Strict cookie never needs to leave the browser.
-const ALLOWED_ORIGINS = ["https://getcoursify.vercel.app", "https://coursify-v2.vercel.app"];
-
+//
+// This function is injected with chrome.scripting.executeScript, which only
+// serializes the function itself. It must stay self-contained: module-scope
+// values are not available in the injected page, so keep the origin list inline.
 export async function importInCoursifyTab(courseUrl) {
-  if (!ALLOWED_ORIGINS.includes(location.origin)) {
+  const allowedOrigins = ["https://getcoursify.vercel.app", "https://coursify-v2.vercel.app"];
+
+  if (!allowedOrigins.includes(location.origin)) {
     return { status: "error", message: "The Coursify tab changed. Please try again." };
   }
 
@@ -35,9 +39,13 @@ export async function importInCoursifyTab(courseUrl) {
     const accessToken = session.data?.data?.accessToken;
 
     if (!session.response.ok || session.data?.success !== true || !accessToken) {
+      // A 404 or non-JSON response means this deployment has no Coursify API
+      // (e.g. an older site), so the other deployment may still work.
+      const retryable = session.data === null || session.response.status === 404;
       return {
         status: "error",
         message: session.data?.message ?? "Could not check your Coursify session. Please try again.",
+        ...(retryable ? { retryable: true } : {}),
       };
     }
 
@@ -73,6 +81,9 @@ export async function importInCoursifyTab(courseUrl) {
       message: importStarted
         ? "The connection ended before import was confirmed. Check your library before retrying."
         : "Could not reach Coursify. Check your connection and try again.",
+      // The import never reached the server, so another Coursify deployment
+      // can safely be tried without risking a duplicate course.
+      retryable: !importStarted,
     };
   } finally {
     clearInterval(keepAlive);

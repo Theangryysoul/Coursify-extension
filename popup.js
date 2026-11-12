@@ -7,11 +7,21 @@ const importButton = document.querySelector("#import-current");
 const retryButton = document.querySelector("#retry");
 const loginButton = document.querySelector("#login");
 const cancelButton = document.querySelector("#cancel");
+const libraryLink = document.querySelector("footer a");
+const PRIMARY_ORIGIN = "https://getcoursify.vercel.app";
+const FALLBACK_ORIGIN = "https://coursify-v2.vercel.app";
 let currentState = null;
+let preferredOrigin = null;
 let submitting = false;
+
+function libraryOrigin(state) {
+  const origin = state?.origin ?? preferredOrigin;
+  return origin === FALLBACK_ORIGIN ? origin : PRIMARY_ORIGIN;
+}
 
 function render(state) {
   currentState = state;
+  libraryLink.href = `${libraryOrigin(state)}/courses`;
   const labels = {
     importing: "Importing course…",
     "waiting-login": "Sign in to continue",
@@ -60,9 +70,16 @@ loginButton.addEventListener("click", () => void send("focus-login"));
 cancelButton.addEventListener("click", () => void send("cancel"));
 
 chrome.storage.onChanged.addListener((changes, area) => {
-  if (area === "local" && changes.importState) render(changes.importState.newValue);
+  if (area !== "local") return;
+  if (changes.preferredOrigin) preferredOrigin = changes.preferredOrigin.newValue;
+  if (changes.importState) render(changes.importState.newValue);
+  else if (changes.preferredOrigin) render(currentState);
 });
 
 await chrome.runtime.sendMessage({ type: "recover" }).catch(() => {});
-const { importState } = await chrome.storage.local.get("importState");
+const { importState, preferredOrigin: storedOrigin } = await chrome.storage.local.get([
+  "importState",
+  "preferredOrigin",
+]);
+preferredOrigin = storedOrigin ?? null;
 render(importState);

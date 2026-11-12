@@ -4,6 +4,7 @@ import { importInCoursifyTab } from "./coursify-api.js";
 const ORIGINS = ["https://getcoursify.vercel.app", "https://coursify-v2.vercel.app"];
 const PRIMARY_ORIGIN = ORIGINS[0];
 const STATE_KEY = "importState";
+const PREFERRED_KEY = "preferredOrigin";
 const ACTIVE_STATUSES = new Set(["importing", "waiting-login"]);
 const YOUTUBE_PATTERNS = [
   "*://*.youtube.com/watch?*",
@@ -18,6 +19,23 @@ const YOUTUBE_PATTERNS = [
 let busy = false;
 
 const readState = async () => (await chrome.storage.local.get(STATE_KEY))[STATE_KEY] ?? null;
+
+// Remembers which Coursify deployment the user actually uses, so the fallback
+// becomes the default once it has worked at least once.
+async function readPreferredOrigin() {
+  const stored = (await chrome.storage.local.get(PREFERRED_KEY))[PREFERRED_KEY];
+  return ORIGINS.includes(stored) ? stored : PRIMARY_ORIGIN;
+}
+
+async function rememberOrigin(origin) {
+  if (ORIGINS.includes(origin)) {
+    await chrome.storage.local.set({ [PREFERRED_KEY]: origin });
+  }
+}
+
+function orderedOrigins(preferred) {
+  return [preferred, ...ORIGINS.filter((origin) => origin !== preferred)];
+}
 
 async function writeState(state) {
   await chrome.storage.local.set({ [STATE_KEY]: state });
@@ -69,7 +87,7 @@ chrome.runtime.onStartup.addListener(() => {
   void setupMenus().catch(console.error);
 });
 
-async function waitForTab(tabId, expectedOrigin) {
+async function waitForTab(tabId) {
   // Register before inspecting the tab, so a fast navigation cannot be missed.
   await new Promise((resolve, reject) => {
     const cleanup = () => {
@@ -101,87 +119,158 @@ async function waitForTab(tabId, expectedOrigin) {
   });
 }
 
-async function getCoursifyTab() {
-  // Try each origin in order (primary first, then fallback)
-  for (const origin of ORIGINS) {
-    const tabs = await chrome.tabs.query({ url: `${origin}/*` });
-    const existing = tabs.find((tab) => tab.active) ?? tabs[0];
-
-    if (existing) {
-      return { tab: existing, temporaryTab: false, origin };
-    }
-  }
-
-  // No existing tab found - create one on the primary origin
-  const tab = await chrome.tabs.create({ url: `${PRIMARY_ORIGIN}/login`, active: false });
-  return { tab, temporaryTab: true, origin: PRIMARY_ORIGIN };
+async function findCoursifyTab(origin) {
+  const tabs = await chrome.tabs.query({ url: `${origin}/*` });
+  return tabs.find((tab) => tab.active) ?? tabs[0] ?? null;
 }
 
-async function closeTemporaryTab(state) {
-  if (!state.temporaryTab || state.loginOpened || !state.tabId) return;
+async function closeIfTemporary(tabId, temporaryTab) {
+  if (!temporaryTab || !tabId) return;
 
   try {
-    const tab = await chrome.tabs.get(state.tabId);
+    const tab = await chrome.tabs.get(tabId);
     if (ORIGINS.includes(new URL(tab.url).origin) && !tab.active) {
-      await chrome.tabs.remove(state.tabId);
+      await chrome.tabs.remove(tabId);
     }
   } catch {
     // The user may already have closed it.
   }
 }
 
-async function showLogin(state) {
-  // Never navigate an existing Coursify tab away from work the user has open.
-  const origin = state.origin || PRIMARY_ORIGIN;
-  let tab;
-
-  if (state.temporaryTab || state.loginOpened) {
-    tab = await chrome.tabs.update(state.tabId, { url: `${origin}/login`, active: true });
-  } else {
-    tab = await chrome.tabs.create({ url: `${origin}/login`, active: true });
+async function tryImport(url, tabId) {
+  try {
+    await waitForTab(tabId);
+    const results = await chrome.scripting.executeScript({
+      target: { tabId },
+      func: importInCoursifyTab,
+      args: [url],
+    });
+    return results[0]?.result ?? null;
+  } catch (error) {
+    console.error("Coursify attempt failed:", error);
+    return null;
   }
-
-  await updateJob(state.id, {
-    tabId: tab.id,
-    temporaryTab: state.temporaryTab || !state.loginOpened,
-    loginOpened: true,
-    status: "waiting-login",
-    message: "Log in to Coursify. Your import will resume automatically.",
-  });
-  await chrome.windows.update(tab.windowId, { focused: true });
 }
 
-async function runImport(state) {
-  try {
-    await waitForTab(state.tabId, state.origin);
-    const results = await chrome.scripting.executeScript({
-      target: { tabId: state.tabId },
-      func: importInCoursifyTab,
-      args: [state.url],
-    });
-    const result = results[0]?.result;
+async function finalize(origin, tabId, temporaryTab, result) {
+  await closeIfTemporary(tabId, temporaryTab);
+  const { retryable, ...rest } = result;
+  return { ...rest, origin, tabId, temporaryTab, loginOpened: false };
+}
+
+async function openLogin(state, candidate) {
+  // Reuse a temporary tab for the login screen; never navigate an existing
+  // work tab the user has open.
+  const tab = candidate.temporaryTab
+    ? await chrome.tabs.update(candidate.tabId, { url: `${candidate.origin}/login`, active: true })
+    : await chrome.tabs.create({ url: `${candidate.origin}/login`, active: true });
+
+  await chrome.windows.update(tab.windowId, { focused: true });
+  return {
+    status: "waiting-login",
+    message: "Log in to Coursify. Your import will resume automatically.",
+    courseId: null,
+    origin: candidate.origin,
+    tabId: tab.id,
+    temporaryTab: candidate.temporaryTab || !state.loginOpened,
+    loginOpened: true,
+  };
+}
+
+// Tries each Coursify deployment in order (the user's last used one first) and
+// falls back to the next one whenever a tab needs login or cannot be reached.
+async function attemptImport(state) {
+  const order = orderedOrigins(await readPreferredOrigin());
+  const loginCandidates = [];
+  const attempted = new Set();
+  let unreachable = false;
+
+  // Prefer tabs the user already has open, so nothing is navigated or created.
+  for (const origin of order) {
+    const tab = await findCoursifyTab(origin);
+    if (!tab) continue;
+
+    attempted.add(origin);
+    const result = await tryImport(state.url, tab.id);
 
     if (!result) {
-      throw new Error("No response from Coursify");
+      unreachable = true;
+      continue;
     }
-
-    const updated = await updateJob(state.id, result);
-    if (!updated) return;
 
     if (result.status === "waiting-login") {
-      if (!updated.loginOpened) await showLogin(updated);
-      return;
+      loginCandidates.push({ tabId: tab.id, origin, temporaryTab: false });
+      continue;
     }
 
-    await closeTemporaryTab(updated);
-  } catch (error) {
-    const updated = await updateJob(state.id, {
-      status: "error",
-      message: "Could not finish the import. Check your library before retrying; Coursify may have received it.",
-    });
-    if (updated) await closeTemporaryTab(updated);
-    console.error("Coursify import failed:", error);
+    if (result.retryable) {
+      unreachable = true;
+      continue;
+    }
+
+    return finalize(origin, tab.id, false, result);
   }
+
+  // A deployment that just needs login is a valid target, so stop there instead
+  // of opening extra tabs. Otherwise try a fresh tab on each untried deployment.
+  if (!loginCandidates.length) {
+    for (const origin of order) {
+      if (attempted.has(origin)) continue;
+
+      const tab = await chrome.tabs.create({ url: `${origin}/login`, active: false });
+      const result = await tryImport(state.url, tab.id);
+
+      if (result?.status === "waiting-login") {
+        loginCandidates.push({ tabId: tab.id, origin, temporaryTab: true });
+        break;
+      }
+
+      if (!result || result.retryable) {
+        unreachable = true;
+        await closeIfTemporary(tab.id, true);
+        continue;
+      }
+
+      return finalize(origin, tab.id, true, result);
+    }
+  }
+
+  if (loginCandidates.length) {
+    const candidate = loginCandidates[0];
+
+    // A login tab is already open; keep waiting instead of opening another one.
+    if (state.loginOpened) {
+      return {
+        status: "waiting-login",
+        message: state.message,
+        courseId: null,
+        origin: candidate.origin,
+        tabId: candidate.tabId,
+        temporaryTab: candidate.temporaryTab,
+        loginOpened: true,
+      };
+    }
+
+    return openLogin(state, candidate);
+  }
+
+  return {
+    status: "error",
+    message: unreachable
+      ? "Could not reach Coursify. Check your connection and try again."
+      : "Could not finish the import. Check your library before retrying; Coursify may have received it.",
+    courseId: null,
+    origin: order[0],
+    tabId: null,
+    temporaryTab: false,
+    loginOpened: false,
+  };
+}
+
+async function finishImport(state) {
+  const patch = await attemptImport(state);
+  await rememberOrigin(patch.origin);
+  return updateJob(state.id, patch);
 }
 
 async function startImport(value) {
@@ -211,9 +300,7 @@ async function startImport(value) {
     await writeState(state);
 
     try {
-      const { tab, temporaryTab, origin } = await getCoursifyTab();
-      state = await updateJob(state.id, { tabId: tab.id, temporaryTab, origin });
-      if (state) await runImport(state);
+      await finishImport(state);
     } catch {
       await updateJob(state.id, {
         status: "error",
@@ -236,7 +323,7 @@ async function resumeAfterLogin(sender) {
     const state = await readState();
     if (state?.status !== "waiting-login" || state.tabId !== sender.tab.id) return;
     const updated = await updateJob(state.id, { status: "importing", message: "Signed in. Importing your course…" });
-    if (updated) await runImport(updated);
+    if (updated) await finishImport(updated);
   } finally {
     busy = false;
   }

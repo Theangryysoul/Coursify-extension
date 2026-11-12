@@ -138,6 +138,21 @@ test("non-JSON API failures become a readable error", async (t) => {
   assert.equal((await importInCoursifyTab(URL)).status, "error");
 });
 
+test("a deployment without the Coursify API is marked retryable", async (t) => {
+  mockRequests(t, [
+    {
+      ok: false,
+      status: 404,
+      json: async () => {
+        throw new Error("HTML not found");
+      },
+    },
+  ]);
+  const result = await importInCoursifyTab(URL);
+  assert.equal(result.status, "error");
+  assert.equal(result.retryable, true);
+});
+
 test("a tab navigated off-site cannot issue credentialed requests", async (t) => {
   const calls = mockRequests(t, [], "https://other.example");
   assert.equal((await importInCoursifyTab(URL)).status, "error");
@@ -188,4 +203,32 @@ test("long imports keep the service worker alive and clear the timer afterwards"
   assert.equal(interval, 20_000);
   assert.deepEqual(messages, ["coursify-import-alive"]);
   assert.equal(cleared, 7);
+});
+
+test("the injected function stays self-contained when serialized", async () => {
+  // chrome.scripting.executeScript serializes the function with toString(),
+  // so it must not depend on module-scope values. Evaluate it in a fresh
+  // context that only has page globals to catch accidental closures.
+  const make = (origin, fetchImpl) =>
+    runInNewContext(`(${importInCoursifyTab.toString()})`, {
+      location: { origin },
+      AbortSignal,
+      fetch: fetchImpl,
+      setInterval: () => 1,
+      clearInterval: () => {},
+      chrome: { runtime: { sendMessage: async () => {} } },
+    });
+
+  const offSite = await make("https://other.example", async () => {
+    throw new Error("should not fetch");
+  })(URL);
+  assert.equal(offSite.status, "error");
+  assert.match(offSite.message, /tab changed/i);
+
+  const allowed = await make("https://coursify-v2.vercel.app", async () => ({
+    ok: false,
+    status: 401,
+    json: async () => ({ success: false }),
+  }))(URL);
+  assert.equal(allowed.status, "waiting-login");
 });
